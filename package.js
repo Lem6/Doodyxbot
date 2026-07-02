@@ -1,0 +1,17 @@
+{
+  "name": "doodyx-bot",
+  "version": "1.0.0",
+  "description": "Doodyx Bot - Bot Discord Français",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1",
+    "better-sqlite3": "^9.4.3"
+  },
+  "engines": {
+    "node": ">=16.9.0"
+  }
+}
