@@ -66,12 +66,6 @@ db.exec(`
   );
 `);
 
-// Update existing configs to new anti-spam defaults
-try {
-  db.prepare("UPDATE guild_config SET max_messages = 4 WHERE max_messages = 5").run();
-  db.prepare("UPDATE guild_config SET max_interval = 3000 WHERE max_interval = 5000").run();
-} catch (e) {}
-
 // ============== CLIENT SETUP ==============
 const client = new Client({
   intents: [
@@ -94,9 +88,7 @@ function getGuildConfig(guildId) {
     .prepare("SELECT * FROM guild_config WHERE guild_id = ?")
     .get(guildId);
   if (!config) {
-    db.prepare("INSERT OR IGNORE INTO guild_config (guild_id) VALUES (?)").run(
-      guildId
-    );
+    db.prepare("INSERT OR IGNORE INTO guild_config (guild_id) VALUES (?)").run(guildId);
     config = db
       .prepare("SELECT * FROM guild_config WHERE guild_id = ?")
       .get(guildId);
@@ -181,22 +173,15 @@ function isSuspiciousLink(content) {
 }
 
 function detectSuspiciousAttachments(message) {
-  // Multiple images at once = often scam screenshots
-  if (message.attachments.size >= 2) {
-    return true;
-  }
-  
-  // Image with no text from new account/member
+  if (message.attachments.size >= 2) return true;
+
   if (message.attachments.size > 0 && message.content.length === 0) {
     const member = message.guild.members.cache.get(message.author.id);
     const accountAge = Date.now() - message.author.createdTimestamp;
     const memberAge = Date.now() - (member?.joinedTimestamp || Date.now());
-    // Account < 30 days OR member < 7 days
-    if (accountAge < 2592000000 || memberAge < 604800000) {
-      return true;
-    }
+    if (accountAge < 2592000000 || memberAge < 604800000) return true;
   }
-  
+
   return false;
 }
 
@@ -221,7 +206,7 @@ const commands = [
         .setName("bienvenue")
         .setDescription("Configurer le salon de bienvenue")
         .addChannelOption((opt) =>
-          opt.setName("salon").setDescription("Le salon de bienvenue").setRequired(true)
+          opt.setName("salon").setDescription("Le salon").setRequired(true)
         )
     )
     .addSubcommand((sub) =>
@@ -229,7 +214,7 @@ const commands = [
         .setName("depart")
         .setDescription("Configurer le salon de départ")
         .addChannelOption((opt) =>
-          opt.setName("salon").setDescription("Le salon de départ").setRequired(true)
+          opt.setName("salon").setDescription("Le salon").setRequired(true)
         )
     )
     .addSubcommand((sub) =>
@@ -237,7 +222,7 @@ const commands = [
         .setName("logs")
         .setDescription("Configurer le salon de logs")
         .addChannelOption((opt) =>
-          opt.setName("salon").setDescription("Le salon de logs").setRequired(true)
+          opt.setName("salon").setDescription("Le salon").setRequired(true)
         )
     )
     .addSubcommand((sub) =>
@@ -245,7 +230,7 @@ const commands = [
         .setName("notifs")
         .setDescription("Configurer le salon de notifications")
         .addChannelOption((opt) =>
-          opt.setName("salon").setDescription("Le salon de notifications").setRequired(true)
+          opt.setName("salon").setDescription("Le salon").setRequired(true)
         )
     )
     .addSubcommand((sub) =>
@@ -253,13 +238,13 @@ const commands = [
         .setName("evolution")
         .setDescription("Configurer le salon d'évolution de rôle")
         .addChannelOption((opt) =>
-          opt.setName("salon").setDescription("Le salon d'évolution").setRequired(true)
+          opt.setName("salon").setDescription("Le salon").setRequired(true)
         )
     )
     .addSubcommand((sub) =>
       sub
         .setName("message-bienvenue")
-        .setDescription("Changer le message de bienvenue ({user} = mention)")
+        .setDescription("Changer le message de bienvenue ({user})")
         .addStringOption((opt) =>
           opt.setName("message").setDescription("Le message").setRequired(true)
         )
@@ -267,7 +252,7 @@ const commands = [
     .addSubcommand((sub) =>
       sub
         .setName("message-depart")
-        .setDescription("Changer le message de départ ({user} = mention)")
+        .setDescription("Changer le message de départ ({user})")
         .addStringOption((opt) =>
           opt.setName("message").setDescription("Le message").setRequired(true)
         )
@@ -275,7 +260,7 @@ const commands = [
     .addSubcommand((sub) =>
       sub
         .setName("message-evolution")
-        .setDescription("Changer le message d'évolution ({user} = mention, {role} = rôle)")
+        .setDescription("Changer le message d'évolution ({user}, {role})")
         .addStringOption((opt) =>
           opt.setName("message").setDescription("Le message").setRequired(true)
         )
@@ -297,7 +282,7 @@ const commands = [
     .setDescription("🔨 Bannir un membre")
     .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers)
     .addUserOption((opt) =>
-      opt.setName("membre").setDescription("Le membre à bannir").setRequired(true)
+      opt.setName("membre").setDescription("Le membre").setRequired(true)
     )
     .addStringOption((opt) => opt.setName("raison").setDescription("La raison")),
 
@@ -306,7 +291,7 @@ const commands = [
     .setDescription("👢 Expulser un membre")
     .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers)
     .addUserOption((opt) =>
-      opt.setName("membre").setDescription("Le membre à expulser").setRequired(true)
+      opt.setName("membre").setDescription("Le membre").setRequired(true)
     )
     .addStringOption((opt) => opt.setName("raison").setDescription("La raison")),
 
@@ -365,18 +350,14 @@ const commands = [
       opt.setName("activer").setDescription("Activer").setRequired(true)
     ),
 
-  new SlashCommandBuilder()
-    .setName("aide")
-    .setDescription("❓ Afficher l'aide"),
+  new SlashCommandBuilder().setName("aide").setDescription("❓ Afficher l'aide"),
 
   new SlashCommandBuilder()
     .setName("userinfo")
     .setDescription("👤 Infos d'un membre")
     .addUserOption((opt) => opt.setName("membre").setDescription("Le membre")),
 
-  new SlashCommandBuilder()
-    .setName("serverinfo")
-    .setDescription("📊 Infos du serveur"),
+  new SlashCommandBuilder().setName("serverinfo").setDescription("📊 Infos du serveur"),
 
   new SlashCommandBuilder()
     .setName("lock")
@@ -541,11 +522,13 @@ client.on("messageCreate", async (message) => {
 
     if (isScam(content) || isSuspiciousLink(content) || hasSuspiciousAttachment) {
       try {
-        await message.delete();
+        await message.delete().catch(() => {});
 
         const member = message.guild.members.cache.get(message.author.id);
+        let timeoutSuccess = false;
         if (member && member.moderatable) {
-          await member.timeout(3600000, "🛡️ Anti-Scam Doodyx Bot");
+          await member.timeout(3600000, "🛡️ Anti-Scam Doodyx Bot").catch(() => {});
+          timeoutSuccess = true;
         }
 
         const embed = new EmbedBuilder()
@@ -553,8 +536,10 @@ client.on("messageCreate", async (message) => {
           .setTitle("🚨 SCAM/HACK DÉTECTÉ ! 🚨")
           .setDescription(
             `**⚠️ Le compte de ${message.author.tag} a possiblement été compromis !**\n\n` +
-              `Le message contenait du contenu suspect (arnaque/phishing/crypto scam/images multiples).\n\n` +
-              `**🔒 Action:** Membre mis en timeout pendant 1 heure.\n` +
+              `Le message contenait du contenu suspect.\n\n` +
+              (timeoutSuccess
+                ? `**🔒 Action:** Timeout 1 heure + message supprimé.\n`
+                : `**🔒 Action:** Message supprimé (impossible de timeout — permissions insuffisantes ou owner).\n`) +
               `**💡 Conseil:** ${message.author.tag}, change ton mot de passe Discord et active le 2FA !`
           )
           .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
@@ -581,10 +566,7 @@ client.on("messageCreate", async (message) => {
                   name: "Contenu",
                   value: content ? `||${content.substring(0, 500)}||` : "Aucun texte (images uniquement)"
                 },
-                {
-                  name: "Attachements",
-                  value: `${message.attachments.size} fichier(s)`
-                }
+                { name: "Attachements", value: `${message.attachments.size} fichier(s)` }
               )
               .setTimestamp();
             logChannel.send({ embeds: [logEmbed] });
@@ -602,8 +584,7 @@ client.on("messageCreate", async (message) => {
   // ======= ANTI-SPAM =======
   if (config?.antispam_enabled) {
     const member = message.guild.members.cache.get(message.author.id);
-    // Only skip server owner (so admins can be tested/protected too)
-    if (member && member.id !== message.guild.ownerId) {
+    if (member) {
       const key = `${message.guild.id}-${message.author.id}`;
       if (!client.spamMap.has(key)) {
         client.spamMap.set(key, []);
@@ -618,19 +599,34 @@ client.on("messageCreate", async (message) => {
 
       if (filtered.length >= (config.max_messages || 4)) {
         try {
-          if (member.moderatable) {
-            await member.timeout(
-              config.timeout_duration || 300000,
-              "🛡️ Anti-Spam Doodyx Bot"
+          // Delete spam messages
+          try {
+            const messages = await message.channel.messages.fetch({ limit: 30 });
+            const userMessages = messages.filter(
+              (m) =>
+                m.author.id === message.author.id &&
+                Date.now() - m.createdTimestamp < 15000
             );
+            if (userMessages.size > 0) {
+              await message.channel.bulkDelete(userMessages, true).catch(() => {});
+            }
+          } catch (e) {}
+
+          let timeoutSuccess = false;
+          if (member.moderatable) {
+            await member
+              .timeout(config.timeout_duration || 300000, "🛡️ Anti-Spam Doodyx Bot")
+              .catch(() => {});
+            timeoutSuccess = true;
           }
 
           const embed = new EmbedBuilder()
             .setColor("#FFA500")
-            .setTitle("🛡️ Anti-Spam Activé")
+            .setTitle("🛡️ Anti-Spam Détecté")
             .setDescription(
-              `${message.author.tag} a été mis en timeout pour spam.\n` +
-                `**Durée:** ${(config.timeout_duration || 300000) / 60000} minutes`
+              timeoutSuccess
+                ? `${message.author.tag} a été mis en timeout pour spam.\n**Durée:** ${(config.timeout_duration || 300000) / 60000} minutes\n**Messages supprimés ✅**`
+                : `⚠️ Spam détecté de **${message.author.tag}** !\nMessages supprimés ✅\n❌ Impossible de timeout (owner / rôle trop haut / admin)`
             )
             .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
             .setFooter({ text: "Protection Anti-Spam" })
@@ -639,7 +635,13 @@ client.on("messageCreate", async (message) => {
           message.channel.send({ embeds: [embed] });
           client.spamMap.set(key, []);
 
-          logAction(message.guild.id, "ANTISPAM", message.author.id, client.user.id, "Timeout pour spam");
+          logAction(
+            message.guild.id,
+            "ANTISPAM",
+            message.author.id,
+            client.user.id,
+            timeoutSuccess ? "Timeout pour spam" : "Spam détecté (pas de timeout)"
+          );
         } catch (err) {
           console.error("Erreur anti-spam:", err);
         }
@@ -666,20 +668,15 @@ client.on("interactionCreate", async (interaction) => {
       .setTitle("📋 Configuration de Doodyx Bot")
       .setDescription(
         "**Salons:**\n" +
-          "`/config bienvenue` - Salon de bienvenue\n" +
-          "`/config depart` - Salon de départ\n" +
-          "`/config logs` - Salon de logs\n" +
-          "`/config notifs` - Salon de notifications\n" +
-          "`/config evolution` - Salon d'évolution\n\n" +
+          "`/config bienvenue` `/config depart` `/config logs`\n" +
+          "`/config notifs` `/config evolution`\n\n" +
           "**Messages:**\n" +
-          "`/config message-bienvenue` - Message de bienvenue\n" +
-          "`/config message-depart` - Message de départ\n" +
-          "`/config message-evolution` - Message d'évolution\n\n" +
+          "`/config message-bienvenue` `/config message-depart`\n" +
+          "`/config message-evolution`\n\n" +
           "**Variables:** `{user}`, `{role}`\n\n" +
           "**Protection:**\n" +
-          "`/antispam` - Anti-spam\n" +
-          "`/antiscam` - Anti-scam\n" +
-          "`/config antispam-config` - Régler l'anti-spam"
+          "`/antispam` `/antiscam`\n" +
+          "`/config antispam-config` - Régler le seuil"
       )
       .setFooter({ text: "Setup 💜" })
       .setTimestamp();
@@ -719,36 +716,11 @@ client.on("interactionCreate", async (interaction) => {
       .setCustomId("panel_select")
       .setPlaceholder("🔧 Choisir une action...")
       .addOptions([
-        {
-          label: "📢 Configurer les salons",
-          description: "Bienvenue, départ, logs...",
-          value: "config_channels",
-          emoji: "📢"
-        },
-        {
-          label: "✉️ Messages personnalisés",
-          description: "Modifier les messages",
-          value: "config_messages",
-          emoji: "✉️"
-        },
-        {
-          label: "🛡️ Anti-Spam",
-          description: "Configurer l'anti-spam",
-          value: "config_antispam",
-          emoji: "🛡️"
-        },
-        {
-          label: "🚨 Anti-Scam",
-          description: "Configurer l'anti-scam",
-          value: "config_antiscam",
-          emoji: "🚨"
-        },
-        {
-          label: "📊 Statistiques",
-          description: "Stats de modération",
-          value: "stats",
-          emoji: "📊"
-        }
+        { label: "📢 Configurer les salons", description: "Bienvenue, départ, logs...", value: "config_channels", emoji: "📢" },
+        { label: "✉️ Messages personnalisés", description: "Modifier les messages", value: "config_messages", emoji: "✉️" },
+        { label: "🛡️ Anti-Spam", description: "Configurer l'anti-spam", value: "config_antispam", emoji: "🛡️" },
+        { label: "🚨 Anti-Scam", description: "Configurer l'anti-scam", value: "config_antiscam", emoji: "🚨" },
+        { label: "📊 Statistiques", description: "Stats de modération", value: "stats", emoji: "📊" }
       ]);
 
     const row = new ActionRowBuilder().addComponents(selectMenu);
@@ -989,9 +961,7 @@ client.on("interactionCreate", async (interaction) => {
       .setThumbnail(user.displayAvatarURL({ dynamic: true }))
       .setDescription(
         warns
-          .map(
-            (w, i) => `**${i + 1}.** ${w.reason}\n└ Par <@${w.moderator_id}> • ${w.timestamp}`
-          )
+          .map((w, i) => `**${i + 1}.** ${w.reason}\n└ Par <@${w.moderator_id}> • ${w.timestamp}`)
           .join("\n\n")
       )
       .setFooter({ text: `Total: ${warns.length} warn(s)` })
@@ -1018,13 +988,7 @@ client.on("interactionCreate", async (interaction) => {
         .setTimestamp();
 
       await interaction.reply({ embeds: [embed], ephemeral: true });
-      logAction(
-        interaction.guild.id,
-        "CLEAR",
-        interaction.user.id,
-        interaction.user.id,
-        `${deleted.size} messages`
-      );
+      logAction(interaction.guild.id, "CLEAR", interaction.user.id, interaction.user.id, `${deleted.size} messages`);
     } catch (err) {
       await interaction.reply({
         content: "❌ Erreur ! Messages > 14 jours non supprimables en masse.",
@@ -1066,19 +1030,9 @@ client.on("interactionCreate", async (interaction) => {
       .setTitle("❓ Aide - Doodyx Bot")
       .setDescription("Toutes les commandes disponibles :")
       .addFields(
-        {
-          name: "⚙️ Configuration",
-          value: "`/setup` `/panel` `/config`"
-        },
-        {
-          name: "🔨 Modération",
-          value:
-            "`/ban` `/kick` `/timeout` `/warn` `/warnings` `/clear` `/unban`"
-        },
-        {
-          name: "🔧 Outils",
-          value: "`/lock` `/unlock` `/slowmode` `/userinfo` `/serverinfo`"
-        },
+        { name: "⚙️ Configuration", value: "`/setup` `/panel` `/config`" },
+        { name: "🔨 Modération", value: "`/ban` `/kick` `/timeout` `/warn` `/warnings` `/clear` `/unban`" },
+        { name: "🔧 Outils", value: "`/lock` `/unlock` `/slowmode` `/userinfo` `/serverinfo`" },
         {
           name: "🛡️ Protection",
           value:
@@ -1299,14 +1253,13 @@ async function handleSelectMenu(interaction) {
           `**Statut:** ${config.antiscam_enabled ? "✅ Activé" : "❌ Désactivé"}\n\n` +
             "**Détecte automatiquement :**\n" +
             "• 🎮 Faux Discord Nitro\n" +
-            "• 💰 Arnaques Crypto (BTC, ETH, NFT)\n" +
-            "• 🎬 Faux giveaways MrBeast\n" +
-            "• 🎰 Casino/rakeback scams\n" +
+            "• 💰 Arnaques Crypto\n" +
+            "• 🎬 Faux MrBeast\n" +
+            "• 🎰 Casino scams\n" +
             "• 🔓 Comptes hackés\n" +
             "• 🔗 Liens phishing\n" +
             "• 🖼️ Images scam multiples\n\n" +
-            "**Action:** Suppression + Timeout 1h\n\n" +
-            "**Commande:** `/antiscam activer:true/false`"
+            "**Action:** Suppression + Timeout 1h"
         )
         .setFooter({ text: "💜" });
 
