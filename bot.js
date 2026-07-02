@@ -81,6 +81,11 @@ const client = new Client({
 
 client.db = db;
 client.spamMap = new Map();
+client.recentlyFlagged = new Map(); // Rate limit anti-spam alerts
+client.recentlyScammed = new Map(); // Rate limit anti-scam alerts
+
+// Nelson "HA-HA! it's a scam" gif
+const NELSON_SCAM_GIF = "https://media.tenor.com/9CFHdKlZk0oAAAAM/nelson-simpsons.gif";
 
 // ============== HELPER FUNCTIONS ==============
 function getGuildConfig(guildId) {
@@ -345,7 +350,6 @@ client.on("guildMemberAdd", async (member) => {
       { name: "📅 Compte créé", value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`, inline: true },
       { name: "👥 Membres", value: `${member.guild.memberCount}`, inline: true }
     )
-    .setImage("https://media.giphy.com/media/l0MYGb1LuZ3n7dRnO/giphy.gif")
     .setFooter({ text: "Bienvenue dans la team ! 💜" })
     .setTimestamp();
 
@@ -371,7 +375,6 @@ client.on("guildMemberRemove", async (member) => {
       { name: "👤 Membre", value: `${member.user.tag}`, inline: true },
       { name: "👥 Membres restants", value: `${member.guild.memberCount}`, inline: true }
     )
-    .setImage("https://media.giphy.com/media/OPU6wzx8JrHna/giphy.gif")
     .setFooter({ text: "À bientôt ! 💜" })
     .setTimestamp();
 
@@ -405,7 +408,6 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
           { name: "👤 Membre", value: `${newMember.user.tag}`, inline: true },
           { name: "🏅 Nouveau rôle", value: `${role.name}`, inline: true }
         )
-        .setImage("https://media.giphy.com/media/g9582DNuQppxC/giphy.gif")
         .setFooter({ text: "Félicitations ! 🔥" })
         .setTimestamp();
 
@@ -414,7 +416,7 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
   }
 });
 
-// ============== MESSAGE CREATE (ANTISPAM + ANTISCAM) WITH DEBUG ==============
+// ============== MESSAGE CREATE (ANTISPAM + ANTISCAM) ==============
 client.on("messageCreate", async (message) => {
   if (message.author.bot || !message.guild) return;
 
@@ -432,13 +434,22 @@ client.on("messageCreate", async (message) => {
     console.log(`[SCAM CHECK] text:${scamText} link:${suspiciousLink} attach:${suspiciousAttach}`);
 
     if (scamText || suspiciousLink || suspiciousAttach) {
+      // Rate limit scam alerts (once per 30s per user)
+      const scamKey = `${message.guild.id}-${message.author.id}`;
+      const lastScam = client.recentlyScammed.get(scamKey) || 0;
+      if (Date.now() - lastScam < 30000) {
+        console.log(`[SCAM] ⏸️ ${message.author.tag} already flagged recently, deleting silently`);
+        try { await message.delete(); } catch (e) {}
+        return;
+      }
+      client.recentlyScammed.set(scamKey, Date.now());
+
       console.log(`🚨 [SCAM DETECTED] ${message.author.tag}`);
 
       const botMember = message.guild.members.me;
       const perms = message.channel.permissionsFor(botMember);
       console.log(`[SCAM] Bot ManageMessages: ${perms.has(PermissionFlagsBits.ManageMessages)}`);
       console.log(`[SCAM] Bot ModerateMembers: ${perms.has(PermissionFlagsBits.ModerateMembers)}`);
-      console.log(`[SCAM] Bot role pos: ${botMember.roles.highest.position} | Target role pos: ${message.member?.roles.highest.position}`);
 
       try {
         try {
@@ -466,16 +477,17 @@ client.on("messageCreate", async (message) => {
 
         const embed = new EmbedBuilder()
           .setColor("#FF0000")
-          .setTitle("🚨 SCAM/HACK DÉTECTÉ ! 🚨")
+          .setTitle("🚨 IT'S A SCAM ! 🚨")
           .setDescription(
             `**⚠️ Le compte de ${message.author.tag} a possiblement été compromis !**\n\n` +
-              `Le message contenait du contenu suspect.\n\n` +
+              `Le message contenait du contenu suspect (scam/phishing/crypto).\n\n` +
               (timeoutSuccess
                 ? `**🔒 Action:** Timeout 1 heure + message supprimé.\n`
                 : `**🔒 Action:** Message supprimé (timeout impossible).\n`) +
               `**💡 Conseil:** Change ton mot de passe Discord et active le 2FA !`
           )
           .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+          .setImage(NELSON_SCAM_GIF)
           .setFooter({ text: "Protection Anti-Scam 🛡️" })
           .setTimestamp();
 
@@ -525,13 +537,22 @@ client.on("messageCreate", async (message) => {
       console.log(`[SPAM CHECK] ${message.author.tag}: ${filtered.length}/${config.max_messages} in ${interval}ms`);
 
       if (filtered.length >= (config.max_messages || 4)) {
+        // Rate limit: only alert once per 30s per user
+        const flagKey = `${message.guild.id}-${message.author.id}`;
+        const lastFlag = client.recentlyFlagged.get(flagKey) || 0;
+        if (Date.now() - lastFlag < 30000) {
+          console.log(`[SPAM] ⏸️ ${message.author.tag} already flagged recently, deleting silently`);
+          try { await message.delete(); } catch (e) {}
+          return;
+        }
+        client.recentlyFlagged.set(flagKey, Date.now());
+
         console.log(`🚨 [SPAM DETECTED] ${message.author.tag}`);
 
         const botMember = message.guild.members.me;
         const perms = message.channel.permissionsFor(botMember);
         console.log(`[SPAM] Bot ManageMessages: ${perms.has(PermissionFlagsBits.ManageMessages)}`);
         console.log(`[SPAM] Bot ModerateMembers: ${perms.has(PermissionFlagsBits.ModerateMembers)}`);
-        console.log(`[SPAM] Bot role pos: ${botMember.roles.highest.position} | Target role pos: ${member.roles.highest.position}`);
 
         try {
           try {
@@ -554,7 +575,6 @@ client.on("messageCreate", async (message) => {
             }
           } catch (e) {
             console.error(`[SPAM] ❌ DELETION ERROR: ${e.message}`);
-            console.error(e);
           }
 
           let timeoutSuccess = false;
