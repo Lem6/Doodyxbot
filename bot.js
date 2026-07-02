@@ -18,6 +18,8 @@ const dotenv = require("dotenv");
 const Database = require("better-sqlite3");
 const fs = require("fs");
 const path = require("path");
+const Parser = require("rss-parser");
+const fetch = require("node-fetch");
 
 dotenv.config();
 
@@ -64,6 +66,13 @@ db.exec(`
     reason TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS notif_cache (
+    guild_id TEXT,
+    type TEXT,
+    content_id TEXT,
+    PRIMARY KEY (guild_id, type, content_id)
+  );
 `);
 
 // ============== CLIENT SETUP ==============
@@ -81,11 +90,14 @@ const client = new Client({
 
 client.db = db;
 client.spamMap = new Map();
-client.recentlyFlagged = new Map(); // Rate limit anti-spam alerts
-client.recentlyScammed = new Map(); // Rate limit anti-scam alerts
+client.recentlyFlagged = new Map();
+client.recentlyScammed = new Map();
 
-// Nelson "HA-HA! it's a scam" gif
+// Nelson "HA-HA!" gif
 const NELSON_SCAM_GIF = "https://media.tenor.com/9CFHdKlZk0oAAAAM/nelson-simpsons.gif";
+
+// RSS + Fetch for notifications
+const parser = new Parser();
 
 // ============== HELPER FUNCTIONS ==============
 function getGuildConfig(guildId) {
@@ -299,7 +311,33 @@ const commands = [
     .addStringOption((opt) => opt.setName("id").setDescription("ID").setRequired(true)),
 
   new SlashCommandBuilder().setName("debug").setDescription("🔧 Debug les permissions du bot")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName("youtube")
+    .setDescription("📺 Configurer les notifications YouTube")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand((sub) =>
+      sub.setName("set").setDescription("Définir la chaîne YouTube")
+        .addStringOption((opt) => opt.setName("channel_id").setDescription("ID de la chaîne YouTube (UCxxxxx)").setRequired(true))
+        .addChannelOption((opt) => opt.setName("salon").setDescription("Salon Discord pour les notifs").setRequired(true))
+    )
+    .addSubcommand((sub) =>
+      sub.setName("disable").setDescription("Désactiver les notifications YouTube")
+    ),
+
+  new SlashCommandBuilder()
+    .setName("twitch")
+    .setDescription("🟣 Configurer les notifications Twitch")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand((sub) =>
+      sub.setName("set").setDescription("Définir le streamer Twitch")
+        .addStringOption((opt) => opt.setName("username").setDescription("Nom d'utilisateur Twitch").setRequired(true))
+        .addChannelOption((opt) => opt.setName("salon").setDescription("Salon Discord pour les notifs").setRequired(true))
+    )
+    .addSubcommand((sub) =>
+      sub.setName("disable").setDescription("Désactiver les notifications Twitch")
+    )
 ];
 
 // ============== READY EVENT ==============
@@ -328,6 +366,20 @@ client.once("ready", async () => {
   } catch (error) {
     console.error("❌ Erreur:", error);
   }
+
+  // First notification check 30s after boot
+  setTimeout(() => {
+    console.log("🔄 First notification check...");
+    checkYouTube();
+    checkTwitch();
+  }, 30000);
+
+  // Then every 5 minutes
+  setInterval(() => {
+    console.log("🔄 Checking YouTube and Twitch notifications...");
+    checkYouTube();
+    checkTwitch();
+  }, 5 * 60 * 1000);
 });
 
 // ============== MEMBER JOIN ==============
@@ -434,7 +486,6 @@ client.on("messageCreate", async (message) => {
     console.log(`[SCAM CHECK] text:${scamText} link:${suspiciousLink} attach:${suspiciousAttach}`);
 
     if (scamText || suspiciousLink || suspiciousAttach) {
-      // Rate limit scam alerts (once per 30s per user)
       const scamKey = `${message.guild.id}-${message.author.id}`;
       const lastScam = client.recentlyScammed.get(scamKey) || 0;
       if (Date.now() - lastScam < 30000) {
@@ -537,7 +588,6 @@ client.on("messageCreate", async (message) => {
       console.log(`[SPAM CHECK] ${message.author.tag}: ${filtered.length}/${config.max_messages} in ${interval}ms`);
 
       if (filtered.length >= (config.max_messages || 4)) {
-        // Rate limit: only alert once per 30s per user
         const flagKey = `${message.guild.id}-${message.author.id}`;
         const lastFlag = client.recentlyFlagged.get(flagKey) || 0;
         if (Date.now() - lastFlag < 30000) {
@@ -666,6 +716,13 @@ client.on("interactionCreate", async (interaction) => {
           })()
         },
         {
+          name: "📺 Notifications",
+          value: (() => {
+            const c = getGuildConfig(interaction.guild.id);
+            return `YouTube: ${c.youtube_channel_id ? `\`${c.youtube_channel_id}\` → <#${c.youtube_notif_channel}>` : "❌"}\nTwitch: ${c.twitch_username ? `\`${c.twitch_username}\` → <#${c.twitch_notif_channel}>` : "❌"}`;
+          })()
+        },
+        {
           name: "💡 Diagnostic",
           value:
             botMember.roles.highest.position <= userMember.roles.highest.position
@@ -695,6 +752,9 @@ client.on("interactionCreate", async (interaction) => {
           "**Protection:**\n" +
           "`/antispam` `/antiscam`\n" +
           "`/config antispam-config` - Régler le seuil\n\n" +
+          "**Notifications:**\n" +
+          "`/youtube set` - Notifs YouTube\n" +
+          "`/twitch set` - Notifs Twitch\n\n" +
           "**Debug:**\n" +
           "`/debug` - Vérifier permissions du bot"
       )
@@ -727,6 +787,12 @@ client.on("interactionCreate", async (interaction) => {
           value:
             `Anti-Spam: ${config.antispam_enabled ? "✅" : "❌"} (${config.max_messages} msg / ${config.max_interval / 1000}s)\n` +
             `Anti-Scam: ${config.antiscam_enabled ? "✅" : "❌"}`
+        },
+        {
+          name: "📺 Notifications",
+          value:
+            `YouTube: ${config.youtube_channel_id ? "✅" : "❌"}\n` +
+            `Twitch: ${config.twitch_username ? "✅" : "❌"}`
         }
       )
       .setFooter({ text: "Panel de Modération 💜" })
@@ -740,6 +806,7 @@ client.on("interactionCreate", async (interaction) => {
         { label: "✉️ Messages personnalisés", description: "Modifier les messages", value: "config_messages", emoji: "✉️" },
         { label: "🛡️ Anti-Spam", description: "Configurer l'anti-spam", value: "config_antispam", emoji: "🛡️" },
         { label: "🚨 Anti-Scam", description: "Configurer l'anti-scam", value: "config_antiscam", emoji: "🚨" },
+        { label: "📺 Notifications", description: "YouTube & Twitch", value: "config_notifs", emoji: "📺" },
         { label: "📊 Statistiques", description: "Stats de modération", value: "stats", emoji: "📊" }
       ]);
 
@@ -806,6 +873,57 @@ client.on("interactionCreate", async (interaction) => {
         content: `✅ Anti-spam configuré: **${messages} messages en ${secondes}s**`,
         ephemeral: true
       });
+    }
+  }
+
+  // ======= YOUTUBE =======
+  if (commandName === "youtube") {
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "set") {
+      const channelId = interaction.options.getString("channel_id");
+      const salon = interaction.options.getChannel("salon");
+
+      if (!channelId.startsWith("UC") || channelId.length < 20) {
+        return interaction.reply({
+          content: "❌ ID YouTube invalide ! Il doit commencer par `UC` (exemple: `UCX6OQ3DkcsbYNE6H8uQQuVA`).\n\n**Comment le trouver :**\n1. Va sur la chaîne YouTube\n2. Regarde l'URL: `youtube.com/channel/UCxxxxx`\n3. Ou utilise https://commentpicker.com/youtube-channel-id.php",
+          ephemeral: true
+        });
+      }
+
+      db.prepare("UPDATE guild_config SET youtube_channel_id = ?, youtube_notif_channel = ? WHERE guild_id = ?")
+        .run(channelId, salon.id, interaction.guild.id);
+
+      await interaction.reply({
+        content: `✅ Notifications YouTube configurées !\n📺 Chaîne: \`${channelId}\`\n📢 Salon: ${salon}\n\nVérification toutes les 5 minutes.`,
+        ephemeral: true
+      });
+    } else if (sub === "disable") {
+      db.prepare("UPDATE guild_config SET youtube_channel_id = NULL, youtube_notif_channel = NULL WHERE guild_id = ?")
+        .run(interaction.guild.id);
+      await interaction.reply({ content: "✅ Notifications YouTube désactivées.", ephemeral: true });
+    }
+  }
+
+  // ======= TWITCH =======
+  if (commandName === "twitch") {
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === "set") {
+      const username = interaction.options.getString("username").toLowerCase();
+      const salon = interaction.options.getChannel("salon");
+
+      db.prepare("UPDATE guild_config SET twitch_username = ?, twitch_notif_channel = ? WHERE guild_id = ?")
+        .run(username, salon.id, interaction.guild.id);
+
+      await interaction.reply({
+        content: `✅ Notifications Twitch configurées !\n🟣 Streamer: \`${username}\`\n📢 Salon: ${salon}\n\nVérification toutes les 5 minutes.`,
+        ephemeral: true
+      });
+    } else if (sub === "disable") {
+      db.prepare("UPDATE guild_config SET twitch_username = NULL, twitch_notif_channel = NULL WHERE guild_id = ?")
+        .run(interaction.guild.id);
+      await interaction.reply({ content: "✅ Notifications Twitch désactivées.", ephemeral: true });
     }
   }
 
@@ -1054,6 +1172,7 @@ client.on("interactionCreate", async (interaction) => {
         { name: "⚙️ Configuration", value: "`/setup` `/panel` `/config` `/debug`" },
         { name: "🔨 Modération", value: "`/ban` `/kick` `/timeout` `/warn` `/warnings` `/clear` `/unban`" },
         { name: "🔧 Outils", value: "`/lock` `/unlock` `/slowmode` `/userinfo` `/serverinfo`" },
+        { name: "📺 Notifications", value: "`/youtube set` `/youtube disable`\n`/twitch set` `/twitch disable`" },
         {
           name: "🛡️ Protection",
           value:
@@ -1266,6 +1385,29 @@ async function handleSelectMenu(interaction) {
         .setFooter({ text: "💜" });
 
       await interaction.reply({ embeds: [embed], ephemeral: true });
+    } else if (value === "config_notifs") {
+      const embed = new EmbedBuilder()
+        .setColor("#FF6B6B")
+        .setTitle("📺 Notifications YouTube & Twitch")
+        .setDescription(
+          `**📺 YouTube:**\n` +
+            (config.youtube_channel_id
+              ? `✅ Configuré: \`${config.youtube_channel_id}\` → <#${config.youtube_notif_channel}>`
+              : "❌ Non configuré") +
+            `\n\n**🟣 Twitch:**\n` +
+            (config.twitch_username
+              ? `✅ Configuré: \`${config.twitch_username}\` → <#${config.twitch_notif_channel}>`
+              : "❌ Non configuré") +
+            `\n\n**Commandes:**\n` +
+            "`/youtube set channel_id:UCxxxxx salon:#notifs`\n" +
+            "`/youtube disable`\n" +
+            "`/twitch set username:kaicenat salon:#notifs`\n" +
+            "`/twitch disable`\n\n" +
+            "**💡 ID YouTube:** URL youtube.com/channel/**UCxxxxx**\nSi c'est `@username`, utilise https://commentpicker.com/youtube-channel-id.php"
+        )
+        .setFooter({ text: "💜" });
+
+      await interaction.reply({ embeds: [embed], ephemeral: true });
     } else if (value === "stats") {
       const totalWarns = db
         .prepare("SELECT COUNT(*) as count FROM warnings WHERE guild_id = ?")
@@ -1296,6 +1438,123 @@ async function handleSelectMenu(interaction) {
         .setTimestamp();
 
       await interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+  }
+}
+
+// ============== YOUTUBE + TWITCH NOTIFICATIONS ==============
+async function checkYouTube() {
+  const configs = db.prepare("SELECT * FROM guild_config WHERE youtube_channel_id IS NOT NULL AND youtube_notif_channel IS NOT NULL").all();
+
+  for (const config of configs) {
+    try {
+      const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${config.youtube_channel_id}`;
+      const feed = await parser.parseURL(feedUrl);
+
+      if (!feed.items || feed.items.length === 0) continue;
+
+      const latestVideo = feed.items[0];
+      const videoId = latestVideo.id.replace("yt:video:", "");
+
+      const alreadyNotified = db.prepare("SELECT * FROM notif_cache WHERE guild_id = ? AND type = ? AND content_id = ?")
+        .get(config.guild_id, "youtube", videoId);
+
+      if (alreadyNotified) continue;
+
+      db.prepare("INSERT OR IGNORE INTO notif_cache (guild_id, type, content_id) VALUES (?, ?, ?)")
+        .run(config.guild_id, "youtube", videoId);
+
+      const videoDate = new Date(latestVideo.pubDate).getTime();
+      if (Date.now() - videoDate > 3600000) continue;
+
+      const guild = client.guilds.cache.get(config.guild_id);
+      if (!guild) continue;
+
+      const channel = guild.channels.cache.get(config.youtube_notif_channel);
+      if (!channel) continue;
+
+      const isShort = latestVideo.title.toLowerCase().includes("#shorts") ||
+                       latestVideo.link.includes("/shorts/");
+
+      const embed = new EmbedBuilder()
+        .setColor("#FF0000")
+        .setTitle(`${isShort ? "🎬 NOUVEAU SHORT !" : "📺 NOUVELLE VIDÉO !"}`)
+        .setDescription(`**${latestVideo.title}**\n\nPar **${feed.title}**`)
+        .setURL(latestVideo.link)
+        .setImage(`https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`)
+        .addFields(
+          { name: "🔗 Lien", value: `[Regarder la vidéo](${latestVideo.link})`, inline: true },
+          { name: "📅 Publié", value: `<t:${Math.floor(videoDate / 1000)}:R>`, inline: true }
+        )
+        .setFooter({ text: "YouTube Notification 📺" })
+        .setTimestamp();
+
+      channel.send({ content: `📢 @everyone Nouvelle vidéo de **${feed.title}** !`, embeds: [embed] })
+        .catch(err => console.error("YouTube send error:", err.message));
+
+      console.log(`[YOUTUBE] ✅ Notified ${feed.title} - ${latestVideo.title}`);
+    } catch (err) {
+      console.error(`[YOUTUBE] Error checking ${config.youtube_channel_id}:`, err.message);
+    }
+  }
+}
+
+async function checkTwitch() {
+  const configs = db.prepare("SELECT * FROM guild_config WHERE twitch_username IS NOT NULL AND twitch_notif_channel IS NOT NULL").all();
+
+  for (const config of configs) {
+    try {
+      const res = await fetch(`https://decapi.me/twitch/uptime/${config.twitch_username}`);
+      const uptime = await res.text();
+
+      const isLive = !uptime.includes("offline") && !uptime.includes("not found") && !uptime.includes("Error");
+
+      if (!isLive) {
+        db.prepare("DELETE FROM notif_cache WHERE guild_id = ? AND type = ? AND content_id = ?")
+          .run(config.guild_id, "twitch", config.twitch_username);
+        continue;
+      }
+
+      const alreadyNotified = db.prepare("SELECT * FROM notif_cache WHERE guild_id = ? AND type = ? AND content_id = ?")
+        .get(config.guild_id, "twitch", config.twitch_username);
+
+      if (alreadyNotified) continue;
+
+      db.prepare("INSERT OR IGNORE INTO notif_cache (guild_id, type, content_id) VALUES (?, ?, ?)")
+        .run(config.guild_id, "twitch", config.twitch_username);
+
+      const titleRes = await fetch(`https://decapi.me/twitch/title/${config.twitch_username}`);
+      const title = await titleRes.text();
+
+      const gameRes = await fetch(`https://decapi.me/twitch/game/${config.twitch_username}`);
+      const game = await gameRes.text();
+
+      const guild = client.guilds.cache.get(config.guild_id);
+      if (!guild) continue;
+
+      const channel = guild.channels.cache.get(config.twitch_notif_channel);
+      if (!channel) continue;
+
+      const embed = new EmbedBuilder()
+        .setColor("#9146FF")
+        .setTitle(`🔴 ${config.twitch_username} est EN LIVE !`)
+        .setDescription(`**${title}**`)
+        .setURL(`https://twitch.tv/${config.twitch_username}`)
+        .addFields(
+          { name: "🎮 Jeu", value: game || "Inconnu", inline: true },
+          { name: "⏰ Depuis", value: uptime, inline: true },
+          { name: "🔗 Lien", value: `[Rejoindre le stream](https://twitch.tv/${config.twitch_username})`, inline: false }
+        )
+        .setImage(`https://static-cdn.jtvnw.net/previews-ttv/live_user_${config.twitch_username}-1920x1080.jpg?rand=${Date.now()}`)
+        .setFooter({ text: "Twitch Notification 🟣" })
+        .setTimestamp();
+
+      channel.send({ content: `📢 @everyone **${config.twitch_username}** est en live sur Twitch !`, embeds: [embed] })
+        .catch(err => console.error("Twitch send error:", err.message));
+
+      console.log(`[TWITCH] ✅ Notified ${config.twitch_username} is live`);
+    } catch (err) {
+      console.error(`[TWITCH] Error checking ${config.twitch_username}:`, err.message);
     }
   }
 }
