@@ -1500,34 +1500,98 @@ async function checkYouTube() {
 }
 
 async function checkTwitch() {
-  const configs = db.prepare("SELECT * FROM guild_config WHERE twitch_username IS NOT NULL AND twitch_notif_channel IS NOT NULL").all();
+  const configs = db.prepare(
+    "SELECT * FROM guild_config WHERE twitch_username IS NOT NULL AND twitch_notif_channel IS NOT NULL"
+  ).all();
 
   for (const config of configs) {
     try {
-      const res = await fetch(`https://decapi.me/twitch/uptime/${config.twitch_username}`);
-      const uptime = await res.text();
+      const res = await fetch(`https://decapi.me/twitch/uptime/${config.twitch_username}`, {
+        headers: {
+          "User-Agent": "DoodxyBot/1.0"
+        }
+      });
 
-      const isLive = !uptime.includes("offline") && !uptime.includes("not found") && !uptime.includes("Error");
-
-      if (!isLive) {
-        db.prepare("DELETE FROM notif_cache WHERE guild_id = ? AND type = ? AND content_id = ?")
-          .run(config.guild_id, "twitch", config.twitch_username);
+      // Vérifier le status HTTP d'abord
+      if (!res.ok) {
+        console.warn(`[TWITCH] HTTP ${res.status} pour ${config.twitch_username}, skip.`);
         continue;
       }
 
-      const alreadyNotified = db.prepare("SELECT * FROM notif_cache WHERE guild_id = ? AND type = ? AND content_id = ?")
-        .get(config.guild_id, "twitch", config.twitch_username);
+      const contentType = res.headers.get("content-type") || "";
+      
+      // Si c'est du HTML = rate limit ou erreur serveur
+      if (contentType.includes("text/html")) {
+        console.warn(`[TWITCH] Reçu HTML (rate limit?) pour ${config.twitch_username}, skip.`);
+        continue;
+      }
 
-      if (alreadyNotified) continue;
+      const uptime = (await res.text()).trim();
+      console.log(`[TWITCH] Uptime response for ${config.twitch_username}: "${uptime}"`);
 
-      db.prepare("INSERT OR IGNORE INTO notif_cache (guild_id, type, content_id) VALUES (?, ?, ?)")
-        .run(config.guild_id, "twitch", config.twitch_username);
+      const isLive = uptime.length > 0 &&
+                     !uptime.toLowerCase().includes("offline") &&
+                     !uptime.toLowerCase().includes("not found") &&
+                     !uptime.toLowerCase().includes("error") &&
+                     !uptime.startsWith("<"); // sécurité anti-HTML
 
-      const titleRes = await fetch(`https://decapi.me/twitch/title/${config.twitch_username}`);
-      const title = await titleRes.text();
+      if (!isLive) {
+        // Reset le cache quand offline
+        db.prepare(
+          "DELETE FROM notif_cache WHERE guild_id = ? AND type = ? AND content_id = ?"
+        ).run(config.guild_id, "twitch", config.twitch_username);
+        console.log(`[TWITCH] ${config.twitch_username} is offline.`);
+        continue;
+      }
 
-      const gameRes = await fetch(`https://decapi.me/twitch/game/${config.twitch_username}`);
-      const game = await gameRes.text();
+      // Déjà notifié ?
+      const alreadyNotified = db.prepare(
+        "SELECT * FROM notif_cache WHERE guild_id = ? AND type = ? AND content_id = ?"
+      ).get(config.guild_id, "twitch", config.twitch_username);
+
+      if (alreadyNotified) {
+        console.log(`[TWITCH] ${config.twitch_username} already notified.`);
+        continue;
+      }
+
+      // Enregistrer dans le cache
+      db.prepare(
+        "INSERT OR IGNORE INTO notif_cache (guild_id, type, content_id) VALUES (?, ?, ?)"
+      ).run(config.guild_id, "twitch", config.twitch_username);
+
+      // Récupérer titre et jeu avec délai pour éviter le rate limit
+      await new Promise(r => setTimeout(r, 1000));
+
+      let title = "Stream en cours";
+      let game = "Inconnu";
+
+      try {
+        const titleRes = await fetch(
+          `https://decapi.me/twitch/title/${config.twitch_username}`,
+          { headers: { "User-Agent": "DoodxyBot/1.0" } }
+        );
+        if (titleRes.ok) {
+          const titleText = (await titleRes.text()).trim();
+          if (!titleText.startsWith("<")) title = titleText;
+        }
+      } catch (e) {
+        console.warn("[TWITCH] Impossible de récupérer le titre.");
+      }
+
+      await new Promise(r => setTimeout(r, 1000));
+
+      try {
+        const gameRes = await fetch(
+          `https://decapi.me/twitch/game/${config.twitch_username}`,
+          { headers: { "User-Agent": "DoodxyBot/1.0" } }
+        );
+        if (gameRes.ok) {
+          const gameText = (await gameRes.text()).trim();
+          if (!gameText.startsWith("<")) game = gameText;
+        }
+      } catch (e) {
+        console.warn("[TWITCH] Impossible de récupérer le jeu.");
+      }
 
       const guild = client.guilds.cache.get(config.guild_id);
       if (!guild) continue;
@@ -1541,20 +1605,29 @@ async function checkTwitch() {
         .setDescription(`**${title}**`)
         .setURL(`https://twitch.tv/${config.twitch_username}`)
         .addFields(
-          { name: "🎮 Jeu", value: game || "Inconnu", inline: true },
+          { name: "🎮 Jeu", value: game, inline: true },
           { name: "⏰ Depuis", value: uptime, inline: true },
-          { name: "🔗 Lien", value: `[Rejoindre le stream](https://twitch.tv/${config.twitch_username})`, inline: false }
+          {
+            name: "🔗 Lien",
+            value: `[Rejoindre le stream](https://twitch.tv/${config.twitch_username})`,
+            inline: false
+          }
         )
-        .setImage(`https://static-cdn.jtvnw.net/previews-ttv/live_user_${config.twitch_username}-1920x1080.jpg?rand=${Date.now()}`)
+        .setImage(
+          `https://static-cdn.jtvnw.net/previews-ttv/live_user_${config.twitch_username}-1920x1080.jpg?rand=${Date.now()}`
+        )
         .setFooter({ text: "Twitch Notification 🟣" })
         .setTimestamp();
 
-      channel.send({ content: `📢 @everyone **${config.twitch_username}** est en live sur Twitch !`, embeds: [embed] })
-        .catch(err => console.error("Twitch send error:", err.message));
+      await channel.send({
+        content: `📢 @everyone **${config.twitch_username}** est en live sur Twitch !`,
+        embeds: [embed]
+      }).catch(err => console.error("Twitch send error:", err.message));
 
-      console.log(`[TWITCH] ✅ Notified ${config.twitch_username} is live`);
+      console.log(`[TWITCH] ✅ Notifié : ${config.twitch_username} est live`);
+
     } catch (err) {
-      console.error(`[TWITCH] Error checking ${config.twitch_username}:`, err.message);
+      console.error(`[TWITCH] Erreur pour ${config.twitch_username}:`, err.message);
     }
   }
 }
